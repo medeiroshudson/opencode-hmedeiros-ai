@@ -11,6 +11,8 @@ import {
   toModelConfig,
 } from "../src/models.js";
 import {
+  expandConfigReference,
+  getConfiguredApiKey,
   isHMedeirosProvider,
   readDiscoveryOptions,
   resolveBaseURL,
@@ -135,7 +137,26 @@ describe("provider matching", () => {
     expect(resolveBaseURL({ baseURL: "https://ai.hmedeiros.dev/v1" })).toBe(
       "https://ai.hmedeiros.dev/v1",
     );
+    expect(resolveBaseURL({ options: { baseURL: "https://ai.hmedeiros.dev/v1" } })).toBe(
+      "https://ai.hmedeiros.dev/v1",
+    );
     expect(resolveBaseURL({})).toBeUndefined();
+  });
+
+  it("resolves {env:} key references from the process environment", () => {
+    process.env.HMEDEIROS_AI_TEST_KEY = "sk-test-value";
+    expect(getConfiguredApiKey({ options: { apiKey: "{env:HMEDEIROS_AI_TEST_KEY}" } })).toBe(
+      "sk-test-value",
+    );
+    delete process.env.HMEDEIROS_AI_TEST_KEY;
+    expect(getConfiguredApiKey({ options: { apiKey: "{env:HMEDEIROS_AI_TEST_KEY}" } })).toBeUndefined();
+    expect(expandConfigReference("{env:MISSING_VAR_XYZ}")).toBeUndefined();
+  });
+
+  it("reads nested options.modelsDiscovery", () => {
+    expect(
+      readDiscoveryOptions({ options: { modelsDiscovery: { enabled: true, timeoutMs: 2000 } } }),
+    ).toEqual({ enabled: true, timeoutMs: 2000 });
   });
 
   it("reads discovery options defensively", () => {

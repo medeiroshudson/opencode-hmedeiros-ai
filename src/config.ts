@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import type { DiscoveryOptions } from "./types.js";
 import { DEFAULT_REQUEST_TIMEOUT_MS } from "./discovery.js";
 
@@ -10,48 +11,124 @@ export interface HMedeirosProviderConfig {
 
 export function readDiscoveryOptions(raw: unknown): DiscoveryOptions {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const cfg = (raw as HMedeirosProviderConfig).modelsDiscovery;
-  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) return {};
+  const cfg = raw as HMedeirosProviderConfig;
+  // Support both `provider.<id>.modelsDiscovery` and
+  // `provider.<id>.options.modelsDiscovery` (used by opencode-models-discovery).
+  // `options.modelsDiscovery` wins on conflicts.
+  const top = cfg.modelsDiscovery;
+  let nested: unknown;
+  if (cfg.options && typeof cfg.options === "object" && !Array.isArray(cfg.options)) {
+    nested = (cfg.options as Record<string, unknown>).modelsDiscovery;
+  }
+  const merged: Record<string, unknown> =
+    typeof top === "object" && top !== null && !Array.isArray(top)
+      ? { ...(top as Record<string, unknown>) }
+      : {};
+  if (typeof nested === "object" && nested !== null && !Array.isArray(nested)) {
+    Object.assign(merged, nested as Record<string, unknown>);
+  }
+  if (Object.keys(merged).length === 0) return {};
   const out: DiscoveryOptions = {};
-  if (typeof cfg.enabled === "boolean") out.enabled = cfg.enabled;
-  if (typeof cfg.endpoint === "string" && cfg.endpoint.length > 0) out.endpoint = cfg.endpoint;
-  if (typeof cfg.timeoutMs === "number" && Number.isFinite(cfg.timeoutMs) && cfg.timeoutMs > 0) {
-    out.timeoutMs = cfg.timeoutMs;
+  if (typeof merged.enabled === "boolean") out.enabled = merged.enabled;
+  if (typeof merged.endpoint === "string" && merged.endpoint.length > 0) out.endpoint = merged.endpoint;
+  if (typeof merged.timeoutMs === "number" && Number.isFinite(merged.timeoutMs) && merged.timeoutMs > 0) {
+    out.timeoutMs = merged.timeoutMs;
   }
-  if (typeof cfg.apiKey === "string" && cfg.apiKey.trim().length > 0) out.apiKey = cfg.apiKey;
-  if (Array.isArray(cfg.includeRegex)) {
-    out.includeRegex = cfg.includeRegex.filter((v): v is string => typeof v === "string");
+  if (typeof merged.apiKey === "string" && merged.apiKey.trim().length > 0) out.apiKey = merged.apiKey;
+  if (Array.isArray(merged.includeRegex)) {
+    out.includeRegex = (merged.includeRegex as unknown[]).filter((v): v is string => typeof v === "string");
   }
-  if (Array.isArray(cfg.excludeRegex)) {
-    out.excludeRegex = cfg.excludeRegex.filter((v): v is string => typeof v === "string");
+  if (Array.isArray(merged.excludeRegex)) {
+    out.excludeRegex = (merged.excludeRegex as unknown[]).filter((v): v is string => typeof v === "string");
   }
-  if (typeof cfg.smartName === "boolean") out.smartName = cfg.smartName;
+  if (typeof merged.smartName === "boolean") out.smartName = merged.smartName;
+  // Legacy/alternate nesting: provider.<id>.options.modelsDiscovery.models.{include,exclude}Regex
+  const nestedModels = (merged as Record<string, unknown>).models;
+  if (nestedModels && typeof nestedModels === "object" && !Array.isArray(nestedModels)) {
+    const m = nestedModels as Record<string, unknown>;
+    if (out.includeRegex === undefined && Array.isArray(m.includeRegex)) {
+      out.includeRegex = (m.includeRegex as unknown[]).filter((v): v is string => typeof v === "string");
+    }
+    if (out.excludeRegex === undefined && Array.isArray(m.excludeRegex)) {
+      out.excludeRegex = (m.excludeRegex as unknown[]).filter((v): v is string => typeof v === "string");
+    }
+  }
   return out;
+}
+
+/**
+ * Resolve a literal `{env:VAR}` / `{file:path}` placeholder to its value.
+ * Returns undefined when the reference cannot be resolved — the caller must
+ * treat that as "no key available", never send the placeholder as a key.
+ */
+export function expandConfigReference(value: string): string | undefined {
+  const trimmed = value.trim();
+  const match = /^\{(env|file):([^}]*)\}$/.exec(trimmed);
+  if (!match) return trimmed;
+  const kind = match[1];
+  const ref = (match[2] ?? "").trim();
+  if (!ref) return undefined;
+  if (kind === "env") {
+    const envVal = process.env[ref];
+    return envVal && envVal.trim().length > 0 ? envVal.trim() : undefined;
+  }
+  try {
+    const req = createRequire(import.meta.url);
+    const fs = req("node:fs") as typeof import("node:fs");
+    const os = req("node:os") as typeof import("node:os");
+    let p = ref;
+    if (p.startsWith("~")) p = os.homedir() + p.slice(1);
+    const content = fs.readFileSync(p, "utf8");
+    return typeof content === "string" && content.trim().length > 0 ? content.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function getConfiguredApiKey(raw: unknown): string | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const direct = (raw as HMedeirosProviderConfig).apiKey;
-  if (typeof direct === "string" && direct.trim().length > 0) return direct.trim();
+  const candidates: unknown[] = [
+    (raw as HMedeirosProviderConfig).apiKey,
+  ];
   const options = (raw as HMedeirosProviderConfig).options;
   if (options && typeof options === "object" && !Array.isArray(options)) {
-    const nested = (options as Record<string, unknown>).apiKey;
-    if (typeof nested === "string" && nested.trim().length > 0) return nested.trim();
+    candidates.push((options as Record<string, unknown>).apiKey);
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) continue;
+    const resolved = expandConfigReference(candidate);
+    if (resolved === undefined || resolved.length === 0) continue;
+    return resolved;
+  }
+  return undefined;
+}
+
+function pickBaseURL(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const cfg = raw as HMedeirosProviderConfig;
+  const candidates: unknown[] = [cfg.baseURL];
+  const options = cfg.options;
+  if (options && typeof options === "object" && !Array.isArray(options)) {
+    const o = options as Record<string, unknown>;
+    candidates.push(o.baseURL, o.endpoint);
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || candidate.trim().length === 0) continue;
+    const trimmed = candidate.trim();
+    if (/^\{(env|file):[^}]*\}$/.test(trimmed)) continue;
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      return trimmed;
+    } catch {
+      continue;
+    }
   }
   return undefined;
 }
 
 export function resolveBaseURL(raw: unknown): string | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const baseURL = (raw as HMedeirosProviderConfig).baseURL;
-  if (typeof baseURL !== "string" || baseURL.trim().length === 0) return undefined;
-  try {
-    const url = new URL(baseURL);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-    return baseURL;
-  } catch {
-    return undefined;
-  }
+  return pickBaseURL(raw);
 }
 
 export function isHMedeirosProvider(providerId: string, raw: unknown): boolean {
