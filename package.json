@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "opencode-hmedeiros-ai",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for automatic model discovery from HMedeiros AI (Bifrost) gateways",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "compile": "esbuild src/index.ts --bundle --format=esm --platform=node --packages=external --target=node18 --sourcemap --keep-names --outfile=dist/index.js",
+    "build": "npm run typecheck && npm run test:run && npm run compile",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "openai-compatible",
+    "model-discovery",
+    "bifrost",
+    "hmedeiros-ai",
+    "ai-gateway"
+  ],
+  "author": "Hudson Medeiros",
+  "license": "MIT",
+  "engines": {
+    "opencode": ">=1.4.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medeiroshudson/opencode-hmedeiros-ai.git"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.4.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.17.10",
+    "@types/node": "^25.0.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}
